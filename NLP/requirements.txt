@@ -1,0 +1,10 @@
+torch;
+pandas;
+bitsandbytes;
+accelerate;
+datasets;
+trl;
+peft;
+tensorboard;
+transformers;
+scikit-learn;
