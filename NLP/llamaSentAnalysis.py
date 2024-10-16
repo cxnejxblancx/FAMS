@@ -21,6 +21,7 @@ Updates:
     - Code drafted for sentiment analysis of student evaluations using LLaMA 3.1 8B Instruct model
     - More work needed for data preprocessing based on csv file directly from CATME
     - Code still needs to be tested and improved to understand current flow and necessary modifications
+    - Error logging needed
 """
 
 # Import
