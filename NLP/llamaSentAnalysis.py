@@ -1,8 +1,7 @@
 """
 1. Open in integrated terminal
-2. Initialize virtual environment: python3 -m venv C:\Users\Malani\FAMS\NLP\sentenv
-3. Set Window's execution policy to RemoteSigned to allow execution of scripts:  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-4. Activate virtual environment: sentenv\Scripts\activate
+2. Initialize virtual environment
+4. Activate virtual environment
 5. Install required packages: pip install -r requirements.txt
 6. HuggingFace login and api key needed: https://huggingface.co/, use huggingface-cli login
 
@@ -67,22 +66,27 @@ df = pd.read_csv(
 )
 
 # Split data based on sentiments
-X_train = list()
-X_test = list()
+X_train = []
+X_test = []
 for sentiment in ["Positive", "Neutral", "Negative"]:
+    sentiment_df = df[df["Sentiment"] == sentiment] # filter dataframe by sentiment
     train, test = train_test_split(
-        df[df.sentiment==sentiment],
-        train_size = 150,
-        test_size = 50,
-        random_state = 42   # ensure each split contains positive, negative, and neutral sentiments)
+        sentiment_df,
+        train_size = 150,   # 150/200 samples in training set
+        test_size = 50,     # 50/200 samples in test set
+        random_state = 42   # ensure each split contains positive, negative, and neutral sentiments
     )
+    X_train.append(train)
+    X_test.append(test)
 
-X_train = pd.concat(X_train).sample(frac=1, random_state=10)
-X_test = pd.concat(X_test)
+# Combine training and test sets, reset index to allow consistent indexing and prevent duplicate indices, discard old indices
+X_train = pd.concat(X_train).sample(frac=1, random_state=10).reset_index(drop=True)
+X_test = pd.concat(X_test).reset_index(drop=True)
 
-eval_idx = [i for i in df.index if i not in list(X_train[i]) + list(X_test.index)]
-X_eval = df[df.index.isin(eval_idx)]
-X_eval = (X_eval.groupby("Sentiment", group_keys=False).apply(lambda x: x.sample(n=50, random_state=True)))
+# Prepare evaluation dataset
+eval_idx = [i for i in df.index if i not in X_train.index and i not in X_test.index]
+X_eval = df.iloc[eval_idx]
+X_eval = X_eval.groupby("Sentiment", group_keys=False).apply(lambda x: x.sample(n=50, random_state=42)).reset_index(drop=True)
 X_train = X_train.reset_index(drop=True)
 
 # Generate prompt
@@ -112,15 +116,11 @@ def evaluate(y_true, y_pred):
     mapping = {
         "Positive" : 2,
         "Neutral": 1,
-        "None" : 1,
         "Negative" : 0
     }
-
-    def map_func(x):
-        return mapping.get(x, 1)
     
-    y_true = np.vectorize(map_func)(y_true)
-    y_pred = np.vectorize(map_func)(y_pred)
+    y_true = np.vectorize(mapping.get)(y_true)
+    y_pred = np.vectorize(mapping.get)(y_pred)
 
     # Calculate accuracy
     accuracy = accuracy_score(y_true=y_true, y_pred=y_pred)
@@ -137,7 +137,7 @@ def evaluate(y_true, y_pred):
         print(f"Accuracy: {accuracy:.3f}")
 
     # Generate classification report
-    class_report = classification_report(y_true=y_true, y_pred=y_pred)
+    class_report = classification_report(y_true=y_true, y_pred=y_pred, target_names=labels)
     print("\nClassification Report:")
     print(class_report)
     
@@ -145,6 +145,8 @@ def evaluate(y_true, y_pred):
     conf_matrix = confusion_matrix(y_true=y_true, y_pred=y_pred, labels=[0,1,2])
     print("\nConfusion Matrix:")
     print(conf_matrix)
+
+    # return accuracy, class_report, conf_matrix
 
 model_name = "meta-llama/Meta-Llama-3.1-8B-instruct"
 compute_dtype = getattr(torch, "float16") # float16 data type will be used for all computations
@@ -175,24 +177,28 @@ tokenizer.pad_token_id = tokenizer.eos_token_id
 
 # Predict sentiment of student evaluation
 def predict(test, model, tokenizer):
-    y_pred = []
-    for i in tqdm(range(len(X_test))):
-        prompt = X_test.iloc[i]["Text"]
-        pipe = pipeline(
+    pipe = pipeline(
             task="text-generation",
             model=model,
             tokenizer=tokenizer,
             max_new_tokens = 1,
             temperature = 0.0   # produce very predictable text
         )
+    
+    y_pred = []
+    for i in tqdm(range(len(X_test))):
+        prompt = X_test.iloc[i]["Text"]
         result = pipe(prompt)
-        answer = result[0]["generated_text"].split('=')[-1]
+        answer = result[0]["generated_text"].split('=')[-1].strip()
+
         if "Positive" in answer:
             y_pred.append("Positive")
-        elif "Neutral" or "None" in answer:
+        elif "Neutral" in answer:
             y_pred.append("Neutral")
         elif "Negative" in answer:
             y_pred.append("Negative")
+        else:
+            y_pred.append("Neutral") # default to neutral if no clear answer
     return y_pred
 
 
@@ -202,10 +208,12 @@ def predict(test, model, tokenizer):
 def compute_metrics(p):
     pred, labels = p
     pred = np.argmax(pred, axis=1)
+
     accuracy = accuracy_score(y_true=labels, y_pred=pred)
     recall = recall_score(y_true=labels, y_pred=pred)
     precision = precision_score(y_true=labels, y_pred=pred)
     f1 = f1_score(y_true=labels, y_pred=pred)
+    
     return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1} 
 
 output_dir = "trained_weights" # temporary location during training --> review later
@@ -225,7 +233,7 @@ training_arguments = TrainingArguments(
     per_device_tain_batch_size=1,       # batch size per device during training
     gradient_accumulation_steps=8,      # num of steps before performing a backward/update pass
     gradient_checkpointing=True,        # use gradient checkpoint to save memory
-    optim="paged_adamw_32bit", 
+    optim="paged_adamw_32bit",          # use optimizer to adjust model weight during training (good for mem. optim.)
     save_steps=0,
     logging_steps=25,                   # log every 10 steps
     learning_rate=1e-4,                 # learning rate --> standard for QLoRA (Quantized Low-Rank Adaptation)
@@ -237,7 +245,14 @@ training_arguments = TrainingArguments(
     warmup_ratio=0.03,                 # standard warmup ration for QLoRA
     group_by_length=False,
     lr_sceduler_type="cosine",         # cosine learning rate scheduler
-    report_to="tensorboard"            # report metrics to tensorboard for visualization
+    report_to="tensorboard",           # report metrics to tensorboard for visualization
+    # evaluation_strategy=IntervalStrategy.STEPS,
+    # eval_steps= 100,                   # Evaluate after every 100 steps
+    # load_best_model_at_end=True,       # Load the best model when finished
+    # metric_for_best_model="accuracy",  # Track accuracy as the best model
+    # callbacks=[EarlyStoppingCallback(early_stopping_patience=3)] # Stop if no improvement for 3 evals
+
+
 )
 # Fine-tune model using Supervised Finetuning Trainer (SFT) to format dataset
 trainer = SFTTrainer(
@@ -255,20 +270,19 @@ trainer = SFTTrainer(
     }
 )
 
-# Main training model
-if "__name___" == "__main__":
+# Main training function
+if __name___ == "__main__":
     # Train model
     trainer.train()
 
-    # Save trained model and tokenizer and training arguments to huggingface hub
-    model.push_to_hub("cxnejxblancx/llamasentanalyzer")
-    tokenizer.push_to_hub("cxnejxblancx/llamasentanalyzer")
-    training_arguments.push_to_hub("cxnejxblancx/llamasentanalyzer")
-    
+    # Save trained model and tokenizer locally
+    trainer.save_model(output_dir)
+    tokenizer.save_pretrained(output_dir)
 
     # Evaluate model on test set
     y_pred = predict(test, model, tokenizer)
     evaluate(y_true, y_pred)
 
+    # Save test predictions
     evaluation = pd.DataFrame({"Text": X_test["Text"], "y_true": y_true,"y_pred": y_pred})
     evaluation.to_csv("test_prediction.csv", index=False)
