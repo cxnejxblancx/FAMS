@@ -4,7 +4,7 @@
 3. Set Window's execution policy to RemoteSigned to allow execution of scripts:  Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 4. Activate virtual environment: sentenv\Scripts\activate
 5. Install required packages: pip install -r requirements.txt
-6. HuggingFace login and api key needed: https://huggingface.co/
+6. HuggingFace login and api key needed: https://huggingface.co/, use huggingface-cli login
 
 Research:
     https://www.datacamp.com/tutorial/text-analytics-beginners-nltk
@@ -39,19 +39,22 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, accuracy_score, recall_score, precision_score, f1_score
 from sklearn.model_selection import train_test_split
 
+# Environment setup
 os.environ["CUDA_VISIBLE_DEVICES"] = '0'        # tells PyTorch to use first GPU available
 os.environ["TOKENIZERS_PARALLELISM"] = "false"  # tells Transformers not to parallelize tokenization process
 warnings.filterwarnings("ignore")               # all warnings will be ignored
 
 print(f"pytorch version: {torch.__version__}")
 
+# Determine GPU availability
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 print(f"working on {device}")
 
-# Disable PyTorch memory efficiency and speed features for scaled dot product attention (SDPA) function
+# Disable PyTorch speed/memory optimization features for scaled dot product attention (SDPA) function
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 torch.backends.cuda.enable_flash_sdp(False)
 
+# Load dataset from CSV file with sentiment labels for each row of text
 #filename = "test data for bert - Sheet1.csv"
 # df = pd.read_csv(filename, names=["text", "Contributing to the Team's Work", "Interacting with Teammates", "Keeping the Team on Track", "Expecting Quality", "Having Relevant Knowledge, Skills, and Abilities"], encoding="utf-8", encoding_errors="replace")
 filename = "Copy of test data for bert - Sheet1.csv"
@@ -62,6 +65,7 @@ df = pd.read_csv(
     encoding_errors="replace"
 )
 
+# Split data based on sentiments
 X_train = list()
 X_test = list()
 for sentiment in ["Positive", "Neutral", "Negative"]:
@@ -69,8 +73,7 @@ for sentiment in ["Positive", "Neutral", "Negative"]:
         df[df.sentiment==sentiment],
         train_size = 150,
         test_size = 50,
-        random_state = 42   # ensure split is stratified by sentiment (each set contains positive,
-                            # negative, and neutral sentiments)
+        random_state = 42   # ensure each split contains positive, negative, and neutral sentiments)
     )
 
 X_train = pd.concat(X_train).sample(frac=1, random_state=10)
@@ -81,25 +84,28 @@ X_eval = df[df.index.isin(eval_idx)]
 X_eval = (X_eval.groupby("Sentiment", group_keys=False).apply(lambda x: x.sample(n=50, random_state=True)))
 X_train = X_train.reset_index(drop=True)
 
-
+# Generate prompt
 def generate_prompt(data_point):
     prompt = f"Analyze the sentiment of the evaluations enclosed in square brackets. Determine if it is positive, neutral, or negative, and return the answer as the corresponding sentiment label 'Positive', 'Negative', or 'Neutral':\n[{data_point["Text"]}] = "
     
     return prompt.strip()
 
+# Generate test prompt (delete later)
 def generate_test_prompt(data_point):
     return generate_prompt(data_point)
 
+# Format data
 X_train = pd.DataFrame(X_train.apply(generate_prompt, axis=1), columns=["Text"])
 X_eval = pd.DataFrame(X_eval.apply(generate_prompt, axis=1), columns=["Text"])
 y_true = X_test.Sentiment
 X_text = pd.DataFrame(X_test.apply(generate_test_prompt, axis=1), columns=["Text"])
 
+# Convert to HuggingFace Dataset objects
 train_data = Dataset.from_pandas(X_train)
 eval_data = Dataset.from_pandas(X_eval)
     
 
-# Evaluate results from fine-tuned model
+# Evaluate predictions from fine-tuned model using metrics and confusion matrix
 def evaluate(y_true, y_pred):
     labels = ["Positive", "Neutral", "Negative"]
     mapping = {
@@ -150,7 +156,7 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_compute_dtype=compute_dtype
 )
 
-# Instantiate model
+# Load model
 model = AutoModelForCausalLM.from_pretrained(
     model_name,
     device_map=device,
@@ -161,6 +167,8 @@ model.config.use_cache = False
 model.config.pretraining_tp = 1
 
 max_seq_length = 512 # 2048 bytes
+
+# Instantiate tokenizer
 tokenizer = AutoTokenizer.from_pretrained(model_name, max_seq_length=max_seq_length)
 tokenizer.pad_token_id = tokenizer.eos_token_id
 
@@ -199,7 +207,7 @@ def compute_metrics(p):
     f1 = f1_score(y_true=labels, y_pred=pred)
     return {"accuracy": accuracy, "precision": precision, "recall": recall, "f1": f1} 
 
-output_dir = "trained_weights"
+output_dir = "trained_weights" # temporary location during training --> review later
 
 peft_config = LoraConfig( 
     lora_alpha=16,
@@ -230,8 +238,7 @@ training_arguments = TrainingArguments(
     lr_sceduler_type="cosine",         # cosine learning rate scheduler
     report_to="tensorboard"            # report metrics to tensorboard for visualization
 )
-
-# Train model using Supervised Finetuning Trainer (SFT) to format dataset --> Specifically for finetuning pretrained models
+# Fine-tune model using Supervised Finetuning Trainer (SFT) to format dataset
 trainer = SFTTrainer(
     model=model,
     args=training_arguments,
@@ -247,14 +254,18 @@ trainer = SFTTrainer(
     }
 )
 
+# Main training model
 if "__name___" == "__main__":
+    # Train model
     trainer.train()
 
-    # Save trained model and tokenizer
-    trainer.save_model()
-    tokenizer.save_pretrained(output_dir)
+    # Save trained model and tokenizer and training arguments to huggingface hub
+    model.push_to_hub("cxnejxblancx/llamasentanalyzer")
+    tokenizer.push_to_hub("cxnejxblancx/llamasentanalyzer")
+    training_arguments.push_to_hub("cxnejxblancx/llamasentanalyzer")
+    
 
-    # Test model
+    # Evaluate model on test set
     y_pred = predict(test, model, tokenizer)
     evaluate(y_true, y_pred)
 
