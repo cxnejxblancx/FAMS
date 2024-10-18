@@ -57,7 +57,7 @@ torch.backends.cuda.enable_flash_sdp(False)
 # Load dataset from CSV file with sentiment labels for each row of text
 #filename = "test data for bert - Sheet1.csv"
 # df = pd.read_csv(filename, names=["text", "Contributing to the Team's Work", "Interacting with Teammates", "Keeping the Team on Track", "Expecting Quality", "Having Relevant Knowledge, Skills, and Abilities"], encoding="utf-8", encoding_errors="replace")
-filename = "Copy of test data for bert - Sheet1.csv"
+filename = "Sheet1.csv"
 df = pd.read_csv(
     filename,
     names= ["Text", "Sentiment"],
