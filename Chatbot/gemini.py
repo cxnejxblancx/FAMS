@@ -4,8 +4,7 @@ Integrate different large language models as global accessible utilities
 
 1. Initialize and activate virtual environment
 2. Install required packages: pip install -r requirements.txt
-3. Assign API key as environment variable: export API_KEY="AIzaSyCrGtK_-qzVe2qhvSNNaYyyx82YlamldtY" ; manual setup for Windows
-
+3. Assign API key as environment variable
 Criteria:
     + Successfully integrate Gemini 1.5 Pro and Gemini 1.5 Flash API
     + Implement error handling and rate limiting
@@ -45,27 +44,29 @@ class GeminiPro:
     
     def __init__(self):
         # Load API key
-        self.api_key = os.environ.get("GEMINI_API_KEY")
-        if not self.api_key:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
             logging.error("GEMINI_API_KEY is missing from envrionment variables.")
             raise ValueError("GEMINI_API_KEY is undefined.")
+        genai.configure(api_key=api_key)
+
         # Load Gemini-1.5-Pro model
         try:
             self.model = genai.GenerativeModel("gemini-1.5-pro")
         except Exception as e:
             logging.error(f"Failed to load Gemini-1.5-Pro model: {e}")
-            raise RuntimeError("An error occured while loading Gemini-1.5-Pro model.")
+            raise RuntimeError(f"Failed to load Gemini-1.5-Pro model: {e}")
    
     # Set rate limit to 2 RPM
     @sleep_and_retry
     @limits(calls=2, period=60)
-    def query(self, prompt, max_tokens=150):
+    def query(self, prompt):
         try:
             response = self.model.generate_content(prompt)
-            return response.candidates[0].text.strip()
+            return response.text.strip()
         except Exception as e:
             logging.error(f"Failed to query Gemini-1.5-Pro model: {e}")
-            return f"Failed to query Gemini-1.5-Flash model: {e}"
+            return f"Failed to query Gemini-1.5-Pro model: {e}"
 
 
 class GeminiFlash:
@@ -74,16 +75,17 @@ class GeminiFlash:
     # Same pattern as GeminiPro
     def __new__(cls):                                          
         if cls._instance is None:                             
-            cls._instance = super(GeminiPro, cls).__new__(cls) 
+            cls._instance = super(GeminiFlash, cls).__new__(cls) 
             cls._instance.__init__()                          
         return cls._instance                                   
 
     def __init__(self):
         # Load API key
-        self.api_key = os.environ.get("GEMINI_API_KEY")
-        if not self.api_key:
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
             logging.error("GEMINI_API_KEY is missing from envrionment variables.")
             raise ValueError("GEMINI_API_KEY is undefined")
+        genai.configure(api_key=api_key)
         # Load Gemini-1.5-Pro model
         try:
             self.model = genai.GenerativeModel("gemini-1.5-flash")
@@ -94,17 +96,17 @@ class GeminiFlash:
     # Set rate limit to 15 RPM
     @sleep_and_retry
     @limits(calls=15, period=60) #15 RPM
-    def query(self, prompt, max_tokens=150):
+    def query(self, prompt):
         try:
             response = self.model.generate_content(prompt)
-            return response.candidates[0].text.strip()
+            return response.text.strip()
         except Exception as e:
             logging.error(f"Failed to query Gemini-1.5-Flash model: {e}")
             return f"Failed to query Gemini-1.5-Flash model: {e}"
-    
+
 def main():
-    prompt = "What is the difference between a stack and a queue?"
-    q1 = GeminiPro.query(prompt)
-    q2 = GeminiFlash.query(prompt)
+    prompt = "What is the difference between a stack and a queue? Answer in at most 2 sentences."
+    q1 = GeminiPro().query(prompt)
+    q2 = GeminiFlash().query(prompt)
     print(f"Prompt: {prompt}\nGemini Pro: {q1}\nGemini Flash: {q2}")
 main()
